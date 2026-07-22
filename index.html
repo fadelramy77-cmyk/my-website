@@ -1,0 +1,715 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>نظام الجرد الاحترافي</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- React & ReactDOM -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+    
+    <!-- Babel for JSX -->
+    <script src="https://unpkg.com/@babel/standalone@7.23.6/babel.min.js"></script>
+
+    <!-- XLSX Library to read & export Excel files -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    
+    <!-- FontAwesome & Google Fonts -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800;900&display=swap" rel="stylesheet">
+
+    <style>
+        body { 
+            font-family: 'Tajawal', sans-serif; 
+            background-color: #f8fafc;
+            margin: 0;
+            padding: 0;
+            overflow-x: hidden;
+        }
+        
+        .custom-scrollbar::-webkit-scrollbar {
+            width: 5px;
+            height: 5px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+            background-color: #cbd5e1;
+            border-radius: 20px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+            background-color: #94a3b8;
+        }
+
+        /* Toast Animation */
+        @keyframes slideRightFade {
+            from { transform: translateX(100px); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
+        .toast-animate {
+            animation: slideRightFade 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+        }
+        
+        input:focus { outline: none; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel" data-type="module">
+        const { useState, useEffect, useRef } = React;
+
+        function App() {
+            // --- States ---
+            const [activeTab, setActiveTab] = useState('main'); // 'main' or 'detailed'
+            
+            // --- Main Tab States ---
+            const [pendingScans, setPendingScans] = useState([]); 
+            const [validScans, setValidScans] = useState([]); 
+            const [invalidScans, setInvalidScans] = useState([]); 
+            const [isSetupPhase, setIsSetupPhase] = useState(true); 
+            const [scanInput, setScanInput] = useState('');
+            const [searchQuery, setSearchQuery] = useState('');
+            const [showClearConfirm, setShowClearConfirm] = useState(false);
+            const [isLoaded, setIsLoaded] = useState(false);
+
+            // --- Detailed Tab States ---
+            const [detailedCartonsDB, setDetailedCartonsDB] = useState({}); 
+            const [detailedSummary, setDetailedSummary] = useState({}); 
+            const [detailedStats, setDetailedStats] = useState({ totalExpected: 0, totalScanned: 0 });
+
+            // Toast State
+            const [toast, setToast] = useState({ show: false, message: '', type: '' });
+            const toastTimeout = useRef(null);
+            const scanInputRef = useRef(null);
+
+            // --- Effects ---
+            useEffect(() => {
+                const savedPending = JSON.parse(localStorage.getItem('inventory_pending') || '[]');
+                const savedValid = JSON.parse(localStorage.getItem('inventory_valid') || '[]');
+                const savedInvalid = JSON.parse(localStorage.getItem('inventory_invalid') || '[]');
+                const savedSetupPhase = localStorage.getItem('inventory_setup');
+                
+                const savedDB = JSON.parse(localStorage.getItem('inventory_detailed_db') || '{}');
+                const savedSummary = JSON.parse(localStorage.getItem('inventory_detailed_summary') || '{}');
+                const savedStats = JSON.parse(localStorage.getItem('inventory_detailed_stats') || '{"totalExpected": 0, "totalScanned": 0}');
+
+                setPendingScans(savedPending);
+                setValidScans(savedValid);
+                setInvalidScans(savedInvalid);
+                
+                setDetailedCartonsDB(savedDB);
+                setDetailedSummary(savedSummary);
+                setDetailedStats(savedStats);
+
+                if (savedSetupPhase !== null) {
+                    setIsSetupPhase(JSON.parse(savedSetupPhase));
+                } else {
+                    setIsSetupPhase(savedPending.length === 0 && savedValid.length === 0 && savedInvalid.length === 0);
+                }
+                
+                setIsLoaded(true);
+            }, []);
+
+            useEffect(() => {
+                if (isLoaded) {
+                    localStorage.setItem('inventory_pending', JSON.stringify(pendingScans));
+                    localStorage.setItem('inventory_valid', JSON.stringify(validScans));
+                    localStorage.setItem('inventory_invalid', JSON.stringify(invalidScans));
+                    localStorage.setItem('inventory_setup', JSON.stringify(isSetupPhase));
+                    
+                    localStorage.setItem('inventory_detailed_db', JSON.stringify(detailedCartonsDB));
+                    localStorage.setItem('inventory_detailed_summary', JSON.stringify(detailedSummary));
+                    localStorage.setItem('inventory_detailed_stats', JSON.stringify(detailedStats));
+                }
+            }, [pendingScans, validScans, invalidScans, isSetupPhase, detailedCartonsDB, detailedSummary, detailedStats, isLoaded]);
+
+            useEffect(() => {
+                if (!isSetupPhase && activeTab === 'main' && scanInputRef.current) {
+                    scanInputRef.current.focus();
+                }
+            }, [isSetupPhase, activeTab]);
+
+            const showNotification = (message, type) => {
+                if(toastTimeout.current) clearTimeout(toastTimeout.current);
+                setToast({ show: true, message, type });
+                toastTimeout.current = setTimeout(() => {
+                    setToast({ show: false, message: '', type: '' });
+                }, 3500);
+            };
+
+            const confirmClearData = () => {
+                setPendingScans([]);
+                setValidScans([]);
+                setInvalidScans([]);
+                setDetailedCartonsDB({});
+                setDetailedSummary({});
+                setDetailedStats({ totalExpected: 0, totalScanned: 0 });
+                setIsSetupPhase(true); 
+                setShowClearConfirm(false);
+                showNotification('تم تصفير السيستم بالكامل بنجاح', 'success');
+            };
+
+            // --- Main Tab Logic ---
+            const handleCartonsUpload = (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+
+                const reader = new FileReader();
+                reader.onload = (evt) => {
+                    try {
+                        const bstr = evt.target.result;
+                        const wb = XLSX.read(bstr, {type:'binary'});
+                        const wsname = wb.SheetNames[0];
+                        const ws = wb.Sheets[wsname];
+                        const rawData = XLSX.utils.sheet_to_json(ws);
+                        
+                        if (rawData.length === 0) {
+                            showNotification('الملف فارغ أو لا يمكن قراءته.', 'error');
+                            return;
+                        }
+
+                        const cartonCodes = rawData.map(row => {
+                            const keys = Object.keys(row);
+                            const ctnKey = keys.find(k => k.toUpperCase().includes('CTN') || k.includes('كرتون')) || keys[0];
+                            return String(row[ctnKey] || row[keys[0]] || '').trim();
+                        }).filter(code => code && code !== 'undefined' && code !== '');
+
+                        const uniqueCodes = [...new Set(cartonCodes)];
+
+                        if (uniqueCodes.length > 0) {
+                            setPendingScans(uniqueCodes);
+                            setValidScans([]); 
+                            setInvalidScans([]);
+                            setIsSetupPhase(false); 
+                            showNotification(`تم رفع ${uniqueCodes.length} كرتونة للجرد بنجاح`, 'success');
+                        } else {
+                            showNotification('لم يتم العثور على أرقام كراتين صالحة في الملف', 'error');
+                        }
+                    } catch (error) {
+                        showNotification('حدث خطأ أثناء قراءة الملف', 'error');
+                    }
+                    e.target.value = null; 
+                };
+                reader.readAsBinaryString(file);
+            };
+
+            // معالجة الاسكان في نظام الجرد الرئيسي
+            const handleScan = (e) => {
+                e.preventDefault();
+                const code = scanInput.trim();
+                if (!code) return;
+                
+                if (validScans.includes(code)) {
+                    showNotification(`الكرتونة (${code}) مكررة وتم جردها مسبقاً!`, 'warning');
+                    setScanInput('');
+                    return;
+                }
+
+                let wasFoundInDetailed = false;
+                let isAlreadyScannedInDetailed = false;
+
+                if (Object.keys(detailedCartonsDB).length > 0) {
+                    if (detailedCartonsDB[code]) {
+                        wasFoundInDetailed = true;
+                        
+                        // دعم الكراتين التي تحتوي على أكثر من صنف (Array of items)
+                        const cartonItems = Array.isArray(detailedCartonsDB[code]) ? detailedCartonsDB[code] : [detailedCartonsDB[code]];
+                        
+                        if (cartonItems[0].isScanned) {
+                            isAlreadyScannedInDetailed = true;
+                        } else {
+                            // تحديث حالة كل الأصناف داخل الكرتونة إلى "تم الجرد"
+                            setDetailedCartonsDB(prev => ({
+                                ...prev,
+                                [code]: cartonItems.map(item => ({ ...item, isScanned: true }))
+                            }));
+
+                            // تجميع وحساب الكميات في كشف الجرد التفصيلي لكل الأصناف داخل هذه الكرتونة
+                            setDetailedSummary(prev => {
+                                const newSum = { ...prev };
+                                
+                                cartonItems.forEach(cartonInfo => {
+                                    const normalizedKey = cartonInfo.partNo.trim().toUpperCase();
+                                    
+                                    if (!newSum[normalizedKey]) {
+                                        newSum[normalizedKey] = {
+                                            partNo: cartonInfo.partNo,
+                                            model: cartonInfo.model,
+                                            description: cartonInfo.description,
+                                            totalQtyScanned: 0,
+                                            cartonsCount: 0
+                                        };
+                                    }
+                                    
+                                    newSum[normalizedKey].totalQtyScanned += cartonInfo.qty;
+                                    newSum[normalizedKey].cartonsCount += 1;
+                                });
+                                
+                                return newSum;
+                            });
+
+                            // تحديث إحصائيات الجرد التفصيلي (بناءً على عدد الكراتين)
+                            setDetailedStats(prev => ({ ...prev, totalScanned: prev.totalScanned + 1 }));
+                        }
+                    }
+                }
+
+                if (pendingScans.includes(code)) {
+                    setPendingScans(pendingScans.filter(c => c !== code));
+                    setValidScans([code, ...validScans]);
+                    
+                    if (wasFoundInDetailed) {
+                        showNotification(`تم جرد الكرتونة (${code}) وتحديث محتوياتها في الجرد التفصيلي`, 'success');
+                    } else {
+                        showNotification(`تم جرد الكرتونة (${code}) بنجاح`, 'success');
+                    }
+                } else if (wasFoundInDetailed) {
+                    if (isAlreadyScannedInDetailed) {
+                        showNotification(`الكرتونة (${code}) مكررة في الجرد التفصيلي!`, 'warning');
+                    } else {
+                        setValidScans([code, ...validScans]);
+                        showNotification(`تم جرد الكرتونة وإضافة أصنافها للجرد التفصيلي`, 'success');
+                    }
+                } else {
+                    if (!invalidScans.includes(code)) {
+                        setInvalidScans([code, ...invalidScans]);
+                        showNotification(`الكرتونة (${code}) غير مسجلة في الشيت المرفوع أو الماستر!`, 'error');
+                    } else {
+                        showNotification(`الكرتونة (${code}) غير مسجلة وتم مسحها مسبقاً!`, 'warning');
+                    }
+                }
+                
+                setScanInput('');
+            };
+
+            // --- Detailed Tab Logic ---
+            const handleMasterUpload = (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+
+                const reader = new FileReader();
+                reader.onload = (evt) => {
+                    try {
+                        const bstr = evt.target.result;
+                        const wb = XLSX.read(bstr, {type:'binary'});
+                        const wsname = wb.SheetNames[0];
+                        const ws = wb.Sheets[wsname];
+                        const rawData = XLSX.utils.sheet_to_json(ws, { header: 1 });
+                        
+                        let newCartonsDB = {};
+
+                        for (let i = 1; i < rawData.length; i++) {
+                            const row = rawData[i];
+                            if (!row || row.length === 0 || !row[1]) continue;
+
+                            const ctnFromStr = String(row[1]).trim(); 
+                            const ctnToStr = String(row[2]).trim();   
+                            const model = String(row[3] || '-').trim(); 
+                            const partNo = String(row[4] || 'بدون كود').trim(); 
+                            const description = String(row[5] || 'بدون وصف').trim(); 
+                            
+                            const totalCtns = parseInt(row[7]) || 1; 
+                            const totalQty = parseInt(row[8]) || 0; 
+                            
+                            const qtyPerCarton = totalCtns > 0 ? Math.round(totalQty / totalCtns) : 0;
+
+                            const from = BigInt(ctnFromStr);
+                            const to = BigInt(ctnToStr || ctnFromStr);
+
+                            for (let c = from; c <= to; c++) {
+                                const cartonId = c.toString();
+                                
+                                // إذا لم تكن الكرتونة موجودة، قم بإنشاء مصفوفة (Array) جديدة لها
+                                if (!newCartonsDB[cartonId]) {
+                                    newCartonsDB[cartonId] = [];
+                                }
+                                
+                                // إضافة الصنف داخل الكرتونة (يسمح بإضافة أكثر من صنف لنفس الكرتونة)
+                                newCartonsDB[cartonId].push({
+                                    partNo,
+                                    model,
+                                    description,
+                                    qty: qtyPerCarton,
+                                    isScanned: false
+                                });
+                            }
+                        }
+
+                        // حساب عدد الكراتين الفريدة الإجمالي وليس عدد الأسطر
+                        const totalExpected = Object.keys(newCartonsDB).length;
+
+                        if (totalExpected > 0) {
+                            setDetailedCartonsDB(newCartonsDB);
+                            setDetailedSummary({}); 
+                            setDetailedStats({ totalExpected: totalExpected, totalScanned: 0 });
+                            showNotification(`تم بناء الذاكرة: ${totalExpected} كرتونة فريدة جاهزة (بعضها يحتوي عدة أصناف)`, 'success');
+                        } else {
+                            showNotification('لم يتم العثور على بيانات صالحة في الأعمدة B,C,H,I', 'error');
+                        }
+                    } catch (error) {
+                        console.error(error);
+                        showNotification('حدث خطأ أثناء قراءة ملف الماستر', 'error');
+                    }
+                    e.target.value = null;
+                };
+                reader.readAsBinaryString(file);
+            };
+
+            const exportDetailedToExcel = () => {
+                const dataToExport = Object.values(detailedSummary).map(item => ({
+                    'الكود (Part No)': item.partNo,
+                    'الموديل (Model)': item.model,
+                    'المسمى (Description)': item.description,
+                    'عدد الكراتين المجردة': item.cartonsCount,
+                    'إجمالي الكمية المجردة': item.totalQtyScanned
+                }));
+
+                if(dataToExport.length === 0) {
+                    showNotification('لا توجد بيانات مجردة لتصديرها حالياً!', 'warning');
+                    return;
+                }
+
+                const ws = XLSX.utils.json_to_sheet(dataToExport);
+                const wb = XLSX.utils.book_new();
+                XLSX.utils.book_append_sheet(wb, ws, "الجرد التفصيلي");
+                XLSX.writeFile(wb, "تقرير_الجرد_التفصيلي_المجمع.xlsx");
+                showNotification('تم تحميل تقرير الجرد التفصيلي المجمع بنجاح', 'success');
+            };
+
+            const filteredPending = pendingScans.filter(c => c.toLowerCase().includes(searchQuery.toLowerCase()));
+            const filteredValid = validScans.filter(c => c.toLowerCase().includes(searchQuery.toLowerCase()));
+            const filteredInvalid = invalidScans.filter(c => c.toLowerCase().includes(searchQuery.toLowerCase()));
+
+            const detailedGroupedDataList = Object.values(detailedSummary).sort((a, b) => String(a.partNo).localeCompare(String(b.partNo)));
+            const totalDetailedItems = detailedGroupedDataList.length;
+            const totalDetailedPieces = detailedGroupedDataList.reduce((sum, item) => sum + item.totalQtyScanned, 0);
+
+            if (!isLoaded) return null;
+
+            return (
+                <div className="min-h-screen flex flex-col items-center relative pb-20">
+                    
+                    {toast.show && (
+                        <div className={`fixed bottom-6 right-6 z-[100] flex items-center gap-3 px-6 py-4 rounded-2xl shadow-[0_10px_40px_-10px_rgba(0,0,0,0.2)] text-white font-bold text-sm tracking-wide toast-animate
+                            ${toast.type === 'success' ? 'bg-[#10b981]' : toast.type === 'error' ? 'bg-[#ef4444]' : 'bg-[#f97316]'}`}>
+                            <i className={`fas ${toast.type === 'success' ? 'fa-check-circle' : toast.type === 'error' ? 'fa-times-circle' : 'fa-exclamation-triangle'} text-xl`}></i>
+                            <span>{toast.message}</span>
+                        </div>
+                    )}
+
+                    {showClearConfirm && (
+                        <div className="fixed inset-0 bg-slate-900/60 z-50 flex items-center justify-center backdrop-blur-sm transition-all">
+                            <div className="bg-white rounded-[24px] p-8 max-w-sm w-full shadow-2xl border border-gray-100 text-center mx-4 transform scale-100 animate-[fadeIn_0.2s_ease-out]">
+                                <div className="w-20 h-20 bg-red-50 rounded-full flex items-center justify-center mx-auto mb-5 text-red-500">
+                                    <i className="fas fa-trash-alt text-3xl"></i>
+                                </div>
+                                <h2 className="text-2xl font-black text-gray-800 mb-2">تأكيد مسح البيانات</h2>
+                                <p className="text-gray-500 mb-8 font-medium text-sm leading-relaxed">
+                                    هل أنت متأكد من رغبتك في تفريغ كافة سجلات الجرد؟ سيتم مسح الشيتات المرفوعة وكل البيانات المحفوظة، ولا يمكن التراجع عن هذا الإجراء.
+                                </p>
+                                <div className="flex gap-3">
+                                    <button onClick={confirmClearData} className="flex-1 bg-red-500 hover:bg-red-600 text-white py-3 rounded-xl font-bold transition-colors shadow-sm">
+                                        نعم، امسح البيانات
+                                    </button>
+                                    <button onClick={() => setShowClearConfirm(false)} className="flex-1 bg-gray-100 hover:bg-gray-200 text-gray-700 py-3 rounded-xl font-bold transition-colors">
+                                        إلغاء
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    <div className="w-full bg-white border-b border-gray-100 py-3 shadow-sm z-10 flex justify-center sticky top-0">
+                        <div className="flex gap-4 px-4 overflow-x-auto hide-scrollbar">
+                            <button 
+                                onClick={() => setActiveTab('main')}
+                                className={`flex items-center gap-2 px-6 py-2.5 rounded-xl font-bold text-sm transition-all whitespace-nowrap
+                                ${activeTab === 'main' ? 'bg-[#2563eb] text-white shadow-[0_4px_14px_0_rgba(37,99,235,0.25)] hover:-translate-y-0.5' : 'bg-[#f1f5f9] text-[#475569] hover:bg-[#e2e8f0]'}`}>
+                                <i className="fas fa-box-open text-base"></i> نظام الجرد الرئيسي
+                            </button>
+                            <button 
+                                onClick={() => setActiveTab('detailed')}
+                                className={`flex items-center gap-2 px-6 py-2.5 rounded-xl font-bold text-sm transition-all whitespace-nowrap
+                                ${activeTab === 'detailed' ? 'bg-[#2563eb] text-white shadow-[0_4px_14px_0_rgba(37,99,235,0.25)] hover:-translate-y-0.5' : 'bg-[#f1f5f9] text-[#475569] hover:bg-[#e2e8f0]'}`}>
+                                <i className="fas fa-search-plus text-base"></i> الجرد التفصيلي المجمع
+                            </button>
+                        </div>
+                    </div>
+
+                    {activeTab === 'main' && (
+                        <main className="w-full max-w-[1400px] px-6 py-8 animate-[fadeIn_0.3s_ease-in]">
+                            
+                            {isSetupPhase ? (
+                                <div className="bg-white border-2 border-dashed border-gray-200 rounded-[2rem] p-8 md:p-16 text-center shadow-sm max-w-2xl mx-auto mt-4 md:mt-12 animate-[fadeIn_0.5s_ease-out]">
+                                    <div className="w-24 h-24 bg-blue-50 rounded-full flex items-center justify-center mx-auto mb-6 text-[#2563eb]">
+                                        <i className="fas fa-file-excel text-5xl"></i>
+                                    </div>
+                                    <h2 className="text-2xl md:text-3xl font-black text-gray-800 mb-4">ابدأ جولة جرد جديدة</h2>
+                                    <p className="text-gray-500 mb-8 font-medium leading-relaxed max-w-md mx-auto">
+                                        قم برفع ملف الإكسيل (شيت الكراتين) الخاص بك لبدء عملية المسح. سيتم تهيئة النظام وحفظ تقدمك تلقائياً.
+                                    </p>
+                                    
+                                    <label className="cursor-pointer inline-flex items-center justify-center gap-3 bg-[#2563eb] hover:bg-blue-700 text-white px-8 md:px-12 py-4 md:py-5 rounded-2xl font-bold text-lg transition-all shadow-[0_8px_16px_-4px_rgba(37,99,235,0.4)] hover:-translate-y-1 w-full sm:w-auto">
+                                        <i className="fas fa-cloud-upload-alt text-2xl"></i>
+                                        <span>اختيار ملف الكراتين</span>
+                                        <input type="file" accept=".xlsx, .xls, .csv" className="hidden" onChange={handleCartonsUpload} />
+                                    </label>
+                                </div>
+                            ) : (
+                                <div className="animate-[fadeIn_0.3s_ease-in]">
+                                    <div className="flex flex-col md:flex-row justify-between items-center mb-8 gap-6">
+                                        <div className="flex items-stretch bg-white border border-gray-200 rounded-2xl shadow-sm h-[72px] overflow-hidden order-2 md:order-1 w-full md:w-auto">
+                                            <div className="px-6 md:px-8 flex flex-col items-center justify-center min-w-[90px] md:min-w-[110px] flex-1 md:flex-none">
+                                                <span className="text-xs text-gray-400 font-bold mb-1">المتبقي</span>
+                                                <span className="text-2xl font-black text-[#f97316] leading-none">{pendingScans.length}</span>
+                                            </div>
+                                            <div className="px-6 md:px-8 flex flex-col items-center justify-center border-r border-gray-100 min-w-[90px] md:min-w-[110px] flex-1 md:flex-none">
+                                                <span className="text-xs text-gray-400 font-bold mb-1">المنجز</span>
+                                                <span className="text-2xl font-black text-[#10b981] leading-none">{validScans.length}</span>
+                                            </div>
+                                            <div className="px-6 md:px-8 flex flex-col items-center justify-center border-r border-gray-100 min-w-[90px] md:min-w-[110px] flex-1 md:flex-none">
+                                                <span className="text-xs text-gray-400 font-bold mb-1">غير مسجل</span>
+                                                <span className="text-2xl font-black text-[#ef4444] leading-none">{invalidScans.length}</span>
+                                            </div>
+                                            <button onClick={() => setShowClearConfirm(true)} title="تصفير الجرد والبدء من جديد" className="px-5 md:px-6 text-gray-300 hover:text-red-500 flex items-center justify-center border-r border-gray-100 bg-gray-50/50 hover:bg-red-50 transition-colors cursor-pointer group">
+                                                <i className="far fa-trash-alt text-xl group-hover:scale-110 transition-transform"></i>
+                                            </button>
+                                        </div>
+
+                                        <div className="flex items-center gap-4 order-1 md:order-2 w-full md:w-auto justify-end">
+                                            <div className="text-right">
+                                                <h1 className="text-[22px] md:text-[26px] font-black text-gray-800 mb-1 tracking-tight">نظام الجرد الرئيسي</h1>
+                                                <p className="text-xs md:text-sm font-medium text-gray-500">إدارة ومتابعة كراتين المخزون (الباركود هنا يغذي الجرد التفصيلي مباشرة)</p>
+                                            </div>
+                                            <label title="تحديث شيت أرقام الكراتين" className="w-12 h-12 md:w-14 md:h-14 bg-[#f1f5f9] hover:bg-[#e2e8f0] border border-gray-200 transition-colors rounded-[14px] flex items-center justify-center text-gray-600 flex-shrink-0 cursor-pointer">
+                                                <i className="fas fa-file-upload text-xl"></i>
+                                                <input type="file" accept=".xlsx, .xls, .csv" className="hidden" onChange={handleCartonsUpload} />
+                                            </label>
+                                        </div>
+                                    </div>
+
+                                    <div className="bg-white border border-gray-200 rounded-[20px] p-2.5 flex flex-col md:flex-row items-center gap-4 mb-8 shadow-sm">
+                                        <div className="w-full md:flex-1 relative flex items-center h-[52px]">
+                                            <i className="fas fa-barcode absolute right-5 text-[#2563eb] text-xl pointer-events-none"></i>
+                                            <form onSubmit={handleScan} className="w-full h-full">
+                                                <input 
+                                                    ref={scanInputRef}
+                                                    value={scanInput} 
+                                                    onChange={e => setScanInput(e.target.value)} 
+                                                    type="text" 
+                                                    placeholder="امسح كود الكرتونة هنا للجرد (Scanner)..." 
+                                                    className="w-full h-full bg-blue-50/50 border border-blue-100 rounded-[14px] py-2 pr-[3.25rem] pl-4 text-blue-900 outline-none font-mono text-lg md:text-xl placeholder-blue-300 placeholder:font-sans focus:bg-white focus:border-blue-400 transition-all" 
+                                                    autoComplete="off"
+                                                />
+                                            </form>
+                                        </div>
+                                        <div className="w-full md:w-[320px] relative h-[52px]">
+                                            <i className="fas fa-search absolute right-4 top-1/2 -translate-y-1/2 text-gray-400"></i>
+                                            <input 
+                                                value={searchQuery}
+                                                onChange={e => setSearchQuery(e.target.value)}
+                                                type="text" 
+                                                placeholder="ابحث في الكشوفات الحالية..." 
+                                                className="w-full h-full bg-[#f8fafc] border border-gray-200 rounded-[14px] py-2 pr-11 pl-4 text-sm font-bold text-gray-700 outline-none focus:border-blue-400 transition-colors placeholder-gray-400" 
+                                            />
+                                        </div>
+                                    </div>
+
+                                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 h-[500px] md:h-[650px]">
+                                        <div className="bg-white border border-gray-200 rounded-3xl flex flex-col shadow-sm overflow-hidden h-full relative">
+                                            <div className="absolute top-0 w-full h-[3px] bg-[#f97316]/20"></div>
+                                            <div className="flex justify-between items-center p-5 md:p-6 pb-4 border-b border-gray-100">
+                                                <div className="flex items-center gap-2.5">
+                                                    <div className="w-2.5 h-2.5 rounded-full bg-[#f97316] mt-0.5 shadow-sm"></div>
+                                                    <h3 className="font-bold text-gray-800 text-lg">بانتظار الفحص</h3>
+                                                </div>
+                                                <span className="bg-[#fff7ed] text-[#ea580c] border border-[#ffedd5] px-3 py-1 rounded-full text-xs font-black">{filteredPending.length}</span>
+                                            </div>
+                                            <div className="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar bg-[#f8fafc]/30">
+                                                {filteredPending.length === 0 ? (
+                                                    <div className="h-full flex flex-col items-center justify-center text-gray-400 text-sm">
+                                                        {searchQuery ? 'لا توجد نتائج بحث' : 'لا توجد كراتين معلقة'}
+                                                    </div>
+                                                ) : (
+                                                    filteredPending.map((code, idx) => (
+                                                        <div key={`pending-${idx}`} className="flex justify-between items-center p-4 py-3 border border-gray-100 rounded-2xl bg-white shadow-sm hover:shadow-md hover:border-orange-100 transition-all duration-200 group">
+                                                            <i className="fas fa-box text-gray-300 group-hover:text-orange-400 text-sm transition-colors"></i>
+                                                            <span className="font-mono font-bold text-gray-600 tracking-wider text-[14px] md:text-[15px]">{code}</span>
+                                                        </div>
+                                                    ))
+                                                )}
+                                            </div>
+                                        </div>
+
+                                        <div className="bg-white border border-[#dcfce3] rounded-3xl flex flex-col shadow-sm overflow-hidden h-full relative">
+                                            <div className="absolute top-0 w-full h-[3px] bg-[#10b981]/20"></div>
+                                            <div className="flex justify-between items-center p-5 md:p-6 pb-4 border-b border-[#f0fdf4] bg-[#f8fafc]/50">
+                                                <div className="flex items-center gap-2.5">
+                                                    <i className="fas fa-check text-[#10b981] mt-0.5 text-[15px]"></i>
+                                                    <h3 className="font-bold text-[#166534] text-lg">تم إنجاز جردها</h3>
+                                                </div>
+                                                <span className="bg-[#f0fdf4] text-[#16a34a] px-3 py-1 rounded-full text-xs font-black border border-[#dcfce3]">{filteredValid.length}</span>
+                                            </div>
+                                            <div className="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar bg-white">
+                                                {filteredValid.length === 0 ? (
+                                                    <div className="h-full flex flex-col items-center justify-center text-gray-400 text-sm">
+                                                        لم يتم جرد أي كرتونة بعد
+                                                    </div>
+                                                ) : (
+                                                    filteredValid.map((code, idx) => (
+                                                        <div key={`valid-${idx}`} className="flex justify-between items-center p-4 py-3 border border-[#dcfce3] rounded-2xl bg-[#f8fafc] md:bg-white shadow-sm hover:shadow-md transition-all duration-200 group animate-[fadeIn_0.2s_ease-out]">
+                                                            <i className="fas fa-check-circle text-[#22c55e] text-sm opacity-80 group-hover:opacity-100 transition-opacity"></i>
+                                                            <span className="font-mono font-bold text-[#166534] tracking-wider text-[14px] md:text-[15px]">{code}</span>
+                                                        </div>
+                                                    ))
+                                                )}
+                                            </div>
+                                        </div>
+
+                                        <div className="bg-[#fef2f2]/30 border border-[#fee2e2] rounded-3xl flex flex-col shadow-sm overflow-hidden h-full relative">
+                                            <div className="absolute top-0 w-full h-[3px] bg-[#ef4444]/20"></div>
+                                            <div className="flex justify-between items-center p-5 md:p-6 pb-4 border-b border-[#fee2e2] bg-[#fef2f2]/80">
+                                                <div className="flex items-center gap-2.5">
+                                                    <i className="fas fa-exclamation-circle text-[#ef4444] mt-0.5 text-[15px]"></i>
+                                                    <h3 className="font-bold text-[#991b1b] text-lg">أكواد غير مسجلة</h3>
+                                                </div>
+                                                <span className="bg-white text-[#dc2626] px-3 py-1 rounded-full text-xs font-black shadow-sm border border-[#fee2e2]">{filteredInvalid.length}</span>
+                                            </div>
+                                            <div className="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar bg-transparent">
+                                                {filteredInvalid.length === 0 ? (
+                                                    <div className="h-full flex flex-col items-center justify-center text-gray-400 text-sm">
+                                                        لا توجد أخطاء
+                                                    </div>
+                                                ) : (
+                                                    filteredInvalid.map((code, idx) => (
+                                                        <div key={`invalid-${idx}`} className="flex justify-between items-center p-4 py-3 border border-[#fecaca] rounded-2xl bg-[#fef2f2] shadow-sm hover:shadow-md transition-all duration-200 group animate-[fadeIn_0.2s_ease-out]">
+                                                            <i className="fas fa-times-circle text-[#ef4444] text-sm opacity-80 group-hover:opacity-100 transition-opacity"></i>
+                                                            <span className="font-mono font-bold text-[#991b1b] tracking-wider text-[14px] md:text-[15px]">{code}</span>
+                                                        </div>
+                                                    ))
+                                                )}
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+                        </main>
+                    )}
+
+                    {activeTab === 'detailed' && (
+                        <main className="w-full max-w-[1400px] px-6 py-8 animate-[fadeIn_0.3s_ease-in]">
+                            <div className="flex flex-col md:flex-row justify-between items-center mb-6 gap-4">
+                                <div>
+                                    <h1 className="text-[26px] font-black text-gray-800 mb-1 tracking-tight">الجرد التفصيلي ومحتوى الكراتين</h1>
+                                    <p className="text-sm font-medium text-gray-500">
+                                        قم برفع الشيت الماستر هنا لتفعيل التتبع التلقائي. عند مسح الأكواد في الشاشة الرئيسية للبرنامج، سيتم تجميع وإظهار كمياتها هنا مباشرة.
+                                    </p>
+                                </div>
+                                <div className="flex gap-3 w-full md:w-auto">
+                                    <label className="flex-1 md:flex-none flex items-center justify-center gap-2 bg-[#3b82f6] hover:bg-[#2563eb] text-white px-6 py-3 rounded-xl font-bold transition-all shadow-[0_4px_14px_0_rgba(59,130,246,0.25)] hover:-translate-y-0.5 cursor-pointer">
+                                        <i className="fas fa-file-upload"></i> رفع الشيت الماستر
+                                        <input type="file" accept=".xlsx, .xls, .csv" className="hidden" onChange={handleMasterUpload} />
+                                    </label>
+                                    <button onClick={exportDetailedToExcel} className="flex-1 md:flex-none flex items-center justify-center gap-2 bg-[#10b981] hover:bg-[#059669] text-white px-6 py-3 rounded-xl font-bold transition-all shadow-[0_4px_14px_0_rgba(16,185,129,0.25)] hover:-translate-y-0.5">
+                                        <i className="fas fa-file-excel"></i> تحميل التقرير (Excel)
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div className="flex justify-between items-end mb-4 px-2">
+                                <h2 className="text-xl font-black text-gray-800">إجمالي الجرد التفصيلي المجمع</h2>
+                                {detailedStats.totalExpected > 0 && (
+                                    <div className="text-sm font-bold text-gray-500">
+                                        تقدم مطابقة الكراتين: <span className="text-blue-600 font-extrabold">{detailedStats.totalScanned}</span> من <span className="text-gray-800 font-extrabold">{detailedStats.totalExpected}</span> كرتونة
+                                    </div>
+                                )}
+                            </div>
+
+                            <div className="bg-white border border-gray-200 rounded-[20px] shadow-sm overflow-hidden">
+                                {Object.keys(detailedCartonsDB).length === 0 ? (
+                                    <div className="p-16 text-center">
+                                        <div className="w-20 h-20 bg-blue-50 rounded-full flex items-center justify-center mx-auto mb-4 text-[#2563eb]">
+                                            <i className="fas fa-database text-4xl"></i>
+                                        </div>
+                                        <h3 className="text-xl font-bold text-gray-800 mb-2">ذاكرة الماستر فارغة</h3>
+                                        <p className="text-gray-500 mb-6 max-w-md mx-auto">يرجى رفع الشيت الماستر لتفعيل مطابقة وتجميع الكميات تلقائياً عند مسحها في الواجهة الرئيسية.</p>
+                                    </div>
+                                ) : detailedGroupedDataList.length === 0 ? (
+                                    <div className="p-16 text-center">
+                                        <div className="w-20 h-20 bg-green-50 rounded-full flex items-center justify-center mx-auto mb-4 text-[#10b981]">
+                                            <i className="fas fa-check-double text-4xl"></i>
+                                        </div>
+                                        <h3 className="text-xl font-bold text-gray-800 mb-2">الذاكرة مبنية وجاهزة للاستقبال</h3>
+                                        <p className="text-gray-500 max-w-md mx-auto">تفضل بالذهاب إلى <strong className="text-blue-600">نظام الجرد الرئيسي</strong> وقم بمسح الباركود، وستظهر تفاصيل الأصناف والكميات المجمعة هنا فوراً!</p>
+                                    </div>
+                                ) : (
+                                    <div className="flex flex-col">
+                                        <div className="bg-slate-50 border-b border-gray-200 p-4 flex gap-6 items-center px-6">
+                                            <div className="flex items-center gap-3">
+                                                <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center text-blue-600">
+                                                    <i className="fas fa-cubes"></i>
+                                                </div>
+                                                <div>
+                                                    <span className="block text-gray-500 font-bold text-xs mb-0.5">أصناف فريدة مضافة</span>
+                                                    <span className="block text-blue-800 font-black text-lg leading-none">{totalDetailedItems}</span>
+                                                </div>
+                                            </div>
+                                            <div className="w-px h-8 bg-gray-200"></div>
+                                            <div className="flex items-center gap-3">
+                                                <div className="w-10 h-10 rounded-full bg-green-100 flex items-center justify-center text-green-600">
+                                                    <i className="fas fa-layer-group"></i>
+                                                </div>
+                                                <div>
+                                                    <span className="block text-gray-500 font-bold text-xs mb-0.5">إجمالي القطع المجمعة</span>
+                                                    <span className="block text-green-800 font-black text-lg leading-none">{totalDetailedPieces}</span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        
+                                        <div className="overflow-x-auto custom-scrollbar">
+                                            <table className="w-full text-right border-collapse">
+                                                <thead>
+                                                    <tr className="bg-[#f8fafc] border-b border-gray-200 text-gray-500 text-sm">
+                                                        <th className="p-4 font-bold">الكود (Part No)</th>
+                                                        <th className="p-4 font-bold">الموديل (Model)</th>
+                                                        <th className="p-4 font-bold min-w-[300px]">المسمى (Description)</th>
+                                                        <th className="p-4 font-bold text-center">عدد الكراتين المجردة</th>
+                                                        <th className="p-4 font-bold text-center">إجمالي الكمية المجردة</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    {detailedGroupedDataList.map((row, idx) => (
+                                                        <tr key={idx} className="border-b border-gray-100 hover:bg-[#f1f5f9]/50 transition-colors">
+                                                            <td className="p-4 font-mono font-bold text-gray-800">{row.partNo}</td>
+                                                            <td className="p-4 font-medium text-gray-600">{row.model}</td>
+                                                            <td className="p-4 text-gray-600 text-sm leading-relaxed">{row.description}</td>
+                                                            <td className="p-4 text-center text-gray-800 font-bold">{row.cartonsCount}</td>
+                                                            <td className="p-4 text-center">
+                                                                <span className="bg-green-50 text-[#16a34a] border border-green-200 px-4 py-1.5 rounded-lg font-black text-sm shadow-sm">{row.totalQtyScanned}</span>
+                                                            </td>
+                                                        </tr>
+                                                    ))}
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        </main>
+                    )}
+
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
